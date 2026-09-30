@@ -26,7 +26,7 @@ the generic helper as a fallback for other firmware descriptions.
  	int ret = 0;
  
  	ret = ath10k_hif_power_up(ar, ATH10K_FIRMWARE_MODE_NORMAL);
-@@ -3854,7 +3856,13 @@ static int ath10k_core_probe_fw(struct a
+@@ -3854,7 +3856,14 @@ static int ath10k_core_probe_fw(struct a
  		ath10k_debug_print_board_info(ar);
  	}
  
