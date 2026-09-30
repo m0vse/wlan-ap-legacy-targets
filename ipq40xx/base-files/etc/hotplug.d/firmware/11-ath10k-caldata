@@ -101,9 +101,6 @@ case "$FIRMWARE" in
 		caldata_extract "0:ART" 0x1000 0x2f20
 		ath10kcal_patch_mac_crc $(macaddr_add $(mtd_get_mac_ascii 0:APPSBLENV ethaddr) +2)
 		;;
-	cambium,e410 |\
-	cambiumnetworks,e410 |\
-	cambiumnetworks,e410b |\
 	cellc,rtl30vw |\
 	compex,wpj419 |\
 	compex,wpj428 |\
@@ -124,6 +121,12 @@ case "$FIRMWARE" in
 	unielec,u4019-32m |\
 	wallys,dr40x9)
 		caldata_extract "0:ART" 0x1000 0x2f20
+		;;
+	cambium,e410 |\
+	cambiumnetworks,e410 |\
+	cambiumnetworks,e410b)
+		caldata_extract "0:ART" 0x1000 0x2f20
+		ath10k_patch_mac $(mtd_get_mac_binary "0:ART" 0x1006)
 		;;
 	devolo,magic-2-wifi-next)
 		caldata_extract "ART" 0x1000 0x2f20
@@ -234,9 +237,6 @@ case "$FIRMWARE" in
 		caldata_extract "0:ART" 0x5000 0x2f20
 		ath10kcal_patch_mac_crc $(macaddr_add $(mtd_get_mac_ascii 0:APPSBLENV ethaddr) +3)
 		;;
-	cambium,e410 |\
-	cambiumnetworks,e410 |\
-	cambiumnetworks,e410b |\
 	cellc,rtl30vw |\
 	compex,wpj419 |\
 	compex,wpj428 |\
@@ -257,6 +257,12 @@ case "$FIRMWARE" in
 	unielec,u4019-32m |\
 	wallys,dr40x9)
 		caldata_extract "0:ART" 0x5000 0x2f20
+		;;
+	cambium,e410 |\
+	cambiumnetworks,e410 |\
+	cambiumnetworks,e410b)
+		caldata_extract "0:ART" 0x5000 0x2f20
+		ath10k_patch_mac $(mtd_get_mac_binary "0:ART" 0x5006)
 		;;
 	devolo,magic-2-wifi-next)
 		caldata_extract "ART" 0x5000 0x2f20
