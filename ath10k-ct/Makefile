@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ath10k-ct
-PKG_RELEASE=3
+PKG_RELEASE=4
 
 PKG_LICENSE:=GPLv2
 PKG_LICENSE_FILES:=
@@ -54,6 +54,7 @@ $(call KernelPackage/ath10k-ct)
 endef
 
 NOSTDINC_FLAGS = \
+	$(KERNEL_NOSTDINC_FLAGS) \
 	-I$(PKG_BUILD_DIR) \
 	-I$(STAGING_DIR)/usr/include/mac80211-backport/uapi \
 	-I$(STAGING_DIR)/usr/include/mac80211-backport \
