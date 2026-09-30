@@ -48,7 +48,8 @@ ab_sage_board() {
 	AB_FIT=$SAGE_FIT
 	AB_QUALIFIED=$SAGE_QUALIFIED
 	AB_RADIOS=$SAGE_RADIOS
-	AB_LAN='eth0 br-lan.1 br-lan'
+	# Stock OpenWiFi places management DHCP on VLAN 4090 over the up bridge.
+	AB_LAN='up0v0 eth0 br-lan.1 br-lan'
 	AB_PROTECTED='0:ART'
 	AB_HEALTH_TRIES=60
 }
