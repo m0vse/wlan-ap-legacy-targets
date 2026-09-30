@@ -253,7 +253,7 @@
 				read-only;
 			};
 
-			partition@170000 {
+			art: partition@170000 {
 				label = "0:ART";
 				reg = <0x170000 0x010000>;
 				read-only;
@@ -311,9 +311,11 @@
 };
 
 &wifi0 {
+	mtd-mac-address = <&art 0x1006>;
 	status = "okay";
 };
 
 &wifi1 {
+	mtd-mac-address = <&art 0x5006>;
 	status = "okay";
 };
