@@ -55,7 +55,7 @@ repeat the OF lookup immediately before validating the permanent address.
  #include <linux/ratelimit.h>
  #include <linux/vmalloc.h>
  #include <linux/average.h>
-@@ -10105,6 +10106,17 @@ int ath10k_mac_register(struct ath10k *a
+@@ -10105,6 +10106,16 @@ int ath10k_mac_register(struct ath10k *a
  	void *channels;
  	int ret;
  
