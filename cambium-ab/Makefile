@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cambium-ab
-PKG_RELEASE:=5
+PKG_RELEASE:=6
 PKG_LICENSE:=GPL-2.0-only
 PKG_MAINTAINER:=Phil Taylor <phil@m0vse.uk>
 
@@ -29,7 +29,7 @@ endef
 
 define Package/cambium-ab/install
 	$(INSTALL_DIR) $(1)/lib/functions $(1)/lib/upgrade $(1)/usr/sbin \
-		$(1)/etc/init.d $(1)/etc/uci-defaults
+		$(1)/etc/init.d $(1)/etc/uci-defaults $(1)/etc/ucentral
 	$(INSTALL_DATA) ./files/cambium-ab.sh $(1)/lib/functions/cambium-ab.sh
 	$(INSTALL_DATA) ./files/cambium-ab-sage.sh $(1)/lib/functions/cambium-ab-sage.sh
 	$(INSTALL_DATA) ./files/cambium-sage.sh $(1)/lib/functions/cambium-sage.sh
@@ -39,6 +39,7 @@ define Package/cambium-ab/install
 	$(INSTALL_BIN) ./files/cambium-ab-status $(1)/usr/sbin/
 	$(INSTALL_BIN) ./files/cambium-ab-guard.init $(1)/etc/init.d/cambium-ab-guard
 	$(INSTALL_BIN) ./files/18_cambium_ab_guard $(1)/etc/uci-defaults/
+	$(INSTALL_DATA) ./files/ucentral-compatible $(1)/etc/ucentral/compatible
 endef
 
 $(eval $(call BuildPackage,cambium-ab))
