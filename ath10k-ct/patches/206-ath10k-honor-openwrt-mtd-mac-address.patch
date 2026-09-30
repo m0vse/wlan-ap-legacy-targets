@@ -47,15 +47,15 @@ repeat the OF lookup immediately before validating the permanent address.
 
 --- a/ath10k-5.7/mac.c
 +++ b/ath10k-5.7/mac.c
-@@ -11,6 +11,7 @@
- #include <linux/bitfield.h>
- #include <linux/ctype.h>
+@@ -12,6 +12,7 @@
  #include <linux/etherdevice.h>
+ #include <linux/acpi.h>
+ #include <linux/of.h>
 +#include <linux/of_net.h>
- #include <linux/ratelimit.h>
- #include <linux/vmalloc.h>
- #include <linux/average.h>
-@@ -10105,6 +10106,16 @@ int ath10k_mac_register(struct ath10k *a
+ #include <linux/bitfield.h>
+ #include <linux/module.h>
+ 
+@@ -10107,6 +10108,16 @@ int ath10k_mac_register(struct ath10k *a
  	void *channels;
  	int ret;
  
