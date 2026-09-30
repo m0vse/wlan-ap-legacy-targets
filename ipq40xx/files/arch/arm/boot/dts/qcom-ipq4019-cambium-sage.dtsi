@@ -96,6 +96,7 @@
 		};
 
 		edma@c080000 {
+			qcom,num_gmac = <1>;
 			status = "okay";
 		};
 	};
