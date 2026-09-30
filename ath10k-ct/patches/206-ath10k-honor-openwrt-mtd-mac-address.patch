@@ -19,7 +19,7 @@ the generic helper as a fallback for other firmware descriptions.
  #include <linux/property.h>
  #include <linux/dmi.h>
  #include <linux/ctype.h>
-@@ -3756,6 +3757,7 @@ static int ath10k_core_probe_fw(struct a
+@@ -3756,5 +3757,6 @@ static int ath10k_core_probe_fw(struct a
  {
  	struct bmi_target_info target_info;
 +	const void *mac = NULL;
