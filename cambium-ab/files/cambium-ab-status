@@ -1,0 +1,22 @@
+#!/bin/sh
+# Read-only Cambium A/B status as key=value lines, for local diagnostics and
+# OpenWISP: running and confirmed slots, any pending trial target, the state
+# (confirmed, armed, trial-started, rolled-back, fallback, writing,
+# write-failed, converting, convert-failed) and the last failure.
+
+. "${CAMBIUM_SYSTEM_FUNCTIONS:-/lib/functions/system.sh}"
+. "${CAMBIUM_AB_LIB:-/lib/functions/cambium-ab.sh}"
+
+ab_family || { echo 'mode=none'; exit 0; }
+if ab_converted; then
+	echo 'mode=ab'
+else
+	echo 'mode=oem-fallback'
+fi
+echo "family=$AB_FAMILY"
+echo "model=$AB_MODEL"
+echo "running=$(ab_running_slot 2>/dev/null)"
+for name in confirmed target state last_failure oem_image; do
+	echo "$name=$(ab_getenv "${AB_ENV}_ab_$name")"
+done
+echo "board_data=$(cat "${CAMBIUM_BDF_STATUS:-/tmp/cambium-board-data.status}" 2>/dev/null)"

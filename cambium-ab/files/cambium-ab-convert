@@ -1,0 +1,124 @@
+#!/bin/sh
+# One-time Cambium A/B conversion: replace the OEM firmware in the inactive bank
+# with a copy of the running OpenWrt bank, so both banks run OpenWrt and
+# normal sysupgrade can write whichever is inactive.
+#
+# Usage: cambium-ab-convert --oem-sha256 HASH [--allow-untested] --yes
+#        cambium-ab-convert --resume --yes
+#
+#   --oem-sha256 HASH  SHA-256 of your verified off-device copy of the OEM
+#                      bank (e.g. dd if=/dev/mtdNro). The live bank must match
+#                      it exactly, proving the backup before it is erased.
+#   --allow-untested   permit a model whose A/B layout is not yet validated
+#   --resume           finish a conversion that was interrupted after the
+#                      OEM bank was erased (the backup was already proven)
+#   --yes              required; erasing the OEM bank cannot be undone here
+#
+# Before anything is erased: the board, SKU and bank layout must match, the
+# running bank must hold a valid device-data vault (filled from the OEM slot
+# at first boot), and the boot environment must already boot the running
+# bank first. The OEM image value is kept as ${AB_ENV}_ab_oem_image.
+
+. "${CAMBIUM_SYSTEM_FUNCTIONS:-/lib/functions/system.sh}"
+. "${CAMBIUM_AB_LIB:-/lib/functions/cambium-ab.sh}"
+. "${CAMBIUM_AB_UPGRADE_LIB:-/lib/upgrade/cambium-ab.sh}"
+
+die() {
+	echo "cambium-ab-convert: $*" >&2
+	logger -t cambium-ab-convert "refused: $*" 2>/dev/null
+	exit 1
+}
+
+oem_sha= allow_untested= resume= yes=
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--oem-sha256) oem_sha=$2; shift ;;
+	--allow-untested) allow_untested=1 ;;
+	--resume) resume=1 ;;
+	--yes) yes=1 ;;
+	*) die "unknown argument $1" ;;
+	esac
+	shift
+done
+[ -n "$yes" ] || die 'pass --yes to confirm erasing the OEM bank'
+
+ab_family || die 'not a Cambium image with A/B support'
+ab_identity || die 'identity or layout check failed'
+[ "$AB_LAYOUT" != pair ] ||
+	die "$AB_NAME needs no conversion: its first sysupgrade writes the other slot"
+ab_converted && die 'already converted; use sysupgrade'
+[ "$AB_QUALIFIED" = 1 ] || [ -n "$allow_untested" ] ||
+	die "$AB_MODEL has no validated A/B conversion yet (--allow-untested overrides)"
+ab_mtd_writable "$AB_TARGET_MTD" ||
+	die "bank $AB_TARGET_PART is read-only: install the A/B persistent image first"
+[ "$AB_VAULT" != 1 ] || ${AB_BOARD_DATA:-/usr/sbin/cambium-board-data} --check-vault ||
+	die 'the running bank has no valid device-data vault; check cambium-board-data first'
+
+state=$(ab_getenv ${AB_ENV}_ab_state)
+dev=${AB_DEV:-/dev}
+if [ -n "$resume" ]; then
+	case "$state" in
+	converting|convert-failed) ;;
+	*) die 'nothing to resume' ;;
+	esac
+else
+	case "$oem_sha" in
+	[0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+	*) die 'give the SHA-256 of your off-device OEM backup with --oem-sha256' ;;
+	esac
+	ab_ubi_for_mtd "$AB_TARGET_MTD" >/dev/null &&
+		die "bank $AB_TARGET_PART is attached; reboot first"
+	echo "Hashing the OEM bank $AB_TARGET_PART (mtd$AB_TARGET_MTD)..."
+	live=$(sha256sum < "$dev/mtd$AB_TARGET_MTD" | cut -d' ' -f1)
+	[ "$live" = "$oem_sha" ] ||
+		die "live OEM bank hash $live does not match your backup $oem_sha"
+fi
+
+# Boot environment: the running bank must come first before the OEM bank is
+# touched, so a power cut never leaves OEM bootipq pointing at a half-written
+# bank. changing_bootcmd is its own write, before bootcmd.
+if [ -z "$resume" ]; then
+	oem_image=$(ab_getenv image)
+	batch=/tmp/cambium-ab-convert.$$
+	printf "${AB_ENV}_ab_oem_image %s\n${AB_ENV}_ab_state converting\n" "${oem_image:-unset}" > "$batch"
+	ab_setenv_batch "$batch" || die 'cannot record the conversion'
+	rm -f "$batch"
+fi
+[ "$(ab_getenv changing_bootcmd)" = 1 ] || ab_setenv changing_bootcmd 1 ||
+	die 'cannot save changing_bootcmd'
+ab_write_boot_vars || die 'cannot write the boot commands'
+ab_setenv bootcmd "run ${AB_ENV}_stable$AB_ACTIVE" || die 'cannot write bootcmd'
+ab_setenv image "$AB_ACTIVE" || die 'cannot write image'
+
+fail() {
+	batch=/tmp/cambium-ab-convert.$$
+	printf "${AB_ENV}_ab_state convert-failed\n${AB_ENV}_ab_last_failure %s\n" "${AB_STEP_ERROR:-$1}" > "$batch"
+	ab_setenv_batch "$batch" >/dev/null 2>&1
+	rm -f "$batch"
+	die "$1 (slot $AB_ACTIVE still boots first; rerun with --resume)"
+}
+
+echo "Writing slot $AB_TARGET ($AB_TARGET_PART) from running slot $AB_ACTIVE..."
+src_kernel=$dev/$(ab_ubi_volume "$AB_ACTIVE_UBI" kernel)
+src_root=$dev/$(ab_ubi_volume "$AB_ACTIVE_UBI" rootfs)
+kernel_size=$(cat "${AB_UBI_SYS:-/sys/class/ubi}/${src_kernel##*/}/data_bytes")
+root_size=$(cat "${AB_UBI_SYS:-/sys/class/ubi}/${src_root##*/}/data_bytes")
+ab_prepare_bank "$kernel_size" "$root_size" || fail "cannot format slot $AB_TARGET"
+# A UBI volume's stat size is 0, so give ubiupdatevol each length.
+ab_step "ubiupdatevol kernel" ubiupdatevol -s "$kernel_size" "$dev/${AB_TARGET_UBI}_0" "$src_kernel" &&
+	ab_step "ubiupdatevol rootfs" ubiupdatevol -s "$root_size" "$dev/${AB_TARGET_UBI}_1" "$src_root" ||
+	fail "cannot write slot $AB_TARGET"
+ab_verify_volume "$dev/${AB_TARGET_UBI}_0" "$src_kernel" "$kernel_size" &&
+	ab_verify_volume "$dev/${AB_TARGET_UBI}_1" "$src_root" "$root_size" ||
+	fail "slot $AB_TARGET readback mismatch"
+[ "$AB_VAULT" != 1 ] || ab_copy_vault || fail 'cannot copy the device-data vault'
+sync
+
+# Converted: ${AB_ENV}_ab_version is written last.
+batch=/tmp/cambium-ab-convert.$$
+printf "${AB_ENV}_ab_confirmed %s\n${AB_ENV}_ab_state confirmed\n${AB_ENV}_ab_version 1\n" "$AB_ACTIVE" > "$batch"
+echo ${AB_ENV}_ab_target >> "$batch"
+ab_setenv_batch "$batch" || fail 'cannot record the finished conversion'
+rm -f "$batch"
+logger -t cambium-ab-convert "slot $AB_TARGET converted; slot $AB_ACTIVE is the default" 2>/dev/null
+echo "Converted: both banks run OpenWrt. Slot $AB_ACTIVE is the default, slot $AB_TARGET the fallback."

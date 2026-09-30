@@ -27,6 +27,9 @@ ipq40xx_setup_interfaces()
 	aruba,ap-303|\
 	aruba,ap-365|\
 	avm,fritzrepeater-1200|\
+	cambium,e410|\
+	cambiumnetworks,e410|\
+	cambiumnetworks,e410b|\
 	dlink,dap-2610 |\
 	engenius,eap1300|\
 	engenius,emd1|\

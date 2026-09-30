@@ -59,10 +59,11 @@ Signed-off-by: Florian Fainelli <florian@openwrt.org>
  	if (ehci->big_endian_mmio) {
 --- a/drivers/usb/host/ehci.h
 +++ b/drivers/usb/host/ehci.h
-@@ -218,6 +218,7 @@ struct ehci_hcd {			/* one per controlle
+@@ -218,7 +218,8 @@ struct ehci_hcd {			/* one per controlle
  	unsigned		frame_index_bug:1; /* MosChip (AKA NetMos) */
  	unsigned		need_oc_pp_cycle:1; /* MPC834X port power */
  	unsigned		imx28_write_fix:1; /* For Freescale i.MX28 */
+ 	unsigned		is_aspeed:1;
 +	unsigned		ignore_oc:1;
  
  	/* required for usb32 quirk */

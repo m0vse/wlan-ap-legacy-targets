@@ -2,6 +2,7 @@
 DEVICE_VARS += NETGEAR_BOARD_ID NETGEAR_HW_ID
 DEVICE_VARS += RAS_BOARD RAS_ROOTFS_SIZE RAS_VERSION
 DEVICE_VARS += WRGG_DEVNAME WRGG_SIGNATURE
+DEVICE_VARS += CAMBIUM_FIT_BOARDS
 
 define Device/FitImage
 	KERNEL_SUFFIX := -fit-uImage.itb
@@ -88,6 +89,46 @@ define Build/wrgg-image
 	-v "" -m "" -B ""
 	mv $@.new $@
 endef
+
+# Build one kernel FIT with the model-specific DTBs and OEM U-Boot
+# configuration names used by the qualified Cambium Sage models.
+define Build/cambium-family-fit
+	sh $(PLATFORM_DIR)/image/cambium-family-its.sh \
+		-k $@ -A $(LINUX_KARCH) -C $(word 1,$(1)) \
+		-a $(KERNEL_LOADADDR) -e $(if $(KERNEL_ENTRY),$(KERNEL_ENTRY),$(KERNEL_LOADADDR)) \
+		-d "$(DEVICE_VENDOR) $(DEVICE_MODEL)" \
+		$(if $(DEVICE_DTS_CONFIG),-D $(DEVICE_DTS_CONFIG)) \
+		$(foreach board,$(CAMBIUM_FIT_BOARDS),$(word 1,$(subst :, ,$(board))):$(word 2,$(subst :, ,$(board))):$(KDIR)/image-$(word 3,$(subst :, ,$(board))).dtb) \
+		> $@.its
+	PATH=$(LINUX_DIR)/scripts/dtc:$(PATH) mkimage -f $@.its $@.new
+	@mv $@.new $@
+endef
+
+define Device/cambium-sage
+	$(call Device/FitzImage)
+	DEVICE_VENDOR := Cambium Networks
+	DEVICE_MODEL := Sage family
+	DEVICE_VARIANT := E410/E410B qualified
+	DEVICE_DTS := qcom-ipq4019-cambium-e410 qcom-ipq4019-cambium-e410b
+	DEVICE_DTS_CONFIG := config@5
+	KERNEL = kernel-bin | cambium-family-fit none
+	CAMBIUM_FIT_BOARDS := 5:e410:qcom-ipq4019-cambium-e410 \
+		17:e410b:qcom-ipq4019-cambium-e410b \
+		ap.dk01.1-c2:e410:qcom-ipq4019-cambium-e410
+	SOC := qcom-ipq4019
+	BLOCKSIZE := 128k
+	PAGESIZE := 2048
+	KERNEL_INSTALL := 1
+	KERNEL_SIZE := 4216k
+	BOARD_NAME := cambium_e410
+	SUPPORTED_DEVICES := cambium,e410 cambiumnetworks,e410 cambiumnetworks,e410b
+	IMAGES := kernel.itb rootfs.squashfs sysupgrade.bin
+	IMAGE/kernel.itb := append-kernel | check-size 4216k
+	IMAGE/rootfs.squashfs := append-rootfs | check-size 37820k
+	IMAGE/sysupgrade.bin := append-rootfs | check-size 37820k | sysupgrade-tar rootfs=$$$$@ | append-metadata
+	DEVICE_PACKAGES := cambium-ab
+endef
+TARGET_DEVICES += cambium-sage
 
 define Device/hfcl_ion4
 	$(call Device/FitImage)

@@ -1,11 +1,21 @@
 PART_NAME=firmware
 REQUIRE_IMAGE_METADATA=1
 
-RAMFS_COPY_BIN='fw_printenv fw_setenv'
+RAMFS_COPY_BIN='fw_printenv fw_setenv head sha256sum tr'
 RAMFS_COPY_DATA='/etc/fw_env.config /var/lock/fw_printenv.lock'
 
 platform_check_image() {
+	if command -v ab_family >/dev/null && ab_family; then
+		cambium_ab_check_image "$1"
+		return
+	fi
 	case "$(board_name)" in
+	cambium,e410|\
+	cambiumnetworks,e410|\
+	cambiumnetworks,e410b)
+		echo "Cambium Sage A/B support is unavailable; refusing to write flash"
+		return 1
+		;;
 	asus,rt-ac58u)
 		CI_UBIPART="UBI_DEV"
 		local ubidev=$(nand_find_ubi $CI_UBIPART)
@@ -56,7 +66,17 @@ zyxel_do_upgrade() {
 }
 
 platform_do_upgrade() {
+	if command -v ab_family >/dev/null && ab_family; then
+		cambium_ab_do_upgrade "$1"
+		return
+	fi
 	case "$(board_name)" in
+	cambium,e410|\
+	cambiumnetworks,e410|\
+	cambiumnetworks,e410b)
+		echo "Cambium Sage A/B support is unavailable; refusing to write flash"
+		return 1
+		;;
 	8dev,jalapeno |\
 	aruba,ap-303 |\
 	aruba,ap-303h |\

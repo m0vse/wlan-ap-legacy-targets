@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+/dts-v1/;
+
+#include "qcom-ipq4019-cambium-sage.dtsi"
+
+/ {
+	model = "Cambium Networks E410";
+	compatible = "cambiumnetworks,e410", "cambium,e410", "qcom,ipq4019";
+
+	cambium-platform {
+		compatible = "cambium-platform";
+		board-sku = <10>;
+	};
+};

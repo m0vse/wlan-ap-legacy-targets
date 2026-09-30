@@ -1,0 +1,203 @@
+#!/bin/sh
+# Cambium A/B boot guard, for every family with an A/B module.
+#
+# Before conversion (one OpenWrt slot, OEM firmware in the other): after a
+# healthy start, re-arm the family's guarded one-shot that restores the OEM
+# default before booting OpenWrt again.
+#
+# After cambium-ab-convert (two OpenWrt banks): commit a trial bank as the new
+# default only after its health checks pass; if the trial fails, or did not
+# come up, record the rollback and stay on (or return to) the old bank.
+
+. "${CAMBIUM_SYSTEM_FUNCTIONS:-/lib/functions/system.sh}"
+. "${CAMBIUM_AB_LIB:-/lib/functions/cambium-ab.sh}"
+
+PAUSE=${AB_GUARD_PAUSE:-5}
+BOARD_DATA_STATUS=${CAMBIUM_BDF_STATUS:-/tmp/cambium-board-data.status}
+
+log() {
+	logger -t cambium-ab-guard "$*" 2>/dev/null
+	echo "cambium-ab-guard: $*" >&2
+}
+
+do_reboot() {
+	${AB_REBOOT:-reboot}
+}
+
+# Health of the slot this kernel runs from: its UBI device and root volume,
+# a writable overlay, wired DHCP with a default route, the family's required
+# radios and, on A/B for a family that keeps one, a valid device-data vault.
+# OpenWISP is deliberately not required.
+# The LAN interface to check: the device the lan network is configured on
+# (br-lan.1 once VLAN filtering is set up), so a missing VLAN bridge fails
+# the check instead of passing on br-lan. Without a readable configuration,
+# the first of the module's AB_LAN candidates that exists, else the last.
+lan_interface() {
+	local lan
+	lan=$(uci -q get network.lan.device 2>/dev/null)
+	[ -n "$lan" ] && { echo "$lan"; return; }
+	for lan in $AB_LAN; do
+		[ -d "${AB_SYS_NET:-/sys/class/net}/$lan" ] && break
+	done
+	echo "$lan"
+}
+
+# The Wi-Fi phys that count towards AB_RADIOS: all of them, or only those of
+# the device AB_RADIO_DEVICE names (the end of its /sys/devices path), so a
+# radio that is not a serving radio (the XV3-8's scanner) cannot stand in
+# for a missing one.
+radios_up() {
+	local phy n=0
+	for phy in "${AB_SYS_IEEE80211:-/sys/class/ieee80211}"/phy*; do
+		[ -e "$phy" ] || continue
+		if [ -n "${AB_RADIO_DEVICE:-}" ]; then
+			case "$(readlink -f "$phy/device" 2>/dev/null)" in
+			*/"$AB_RADIO_DEVICE") ;;
+			*) continue ;;
+			esac
+		fi
+		n=$((n + 1))
+	done
+	echo "$n"
+}
+
+healthy() {
+	local lan
+	ab_identity >/dev/null 2>&1 || return 1
+	if ab_hook root_healthy; then
+		"ab_${AB_FAMILY}_root_healthy" || return 1
+	else
+		[ -e "${AB_DEV:-/dev}/ubiblock0_1" ] || return 1
+		grep -q ' /overlay ubifs rw' "${AB_PROC_MOUNTS:-/proc/mounts}" || return 1
+	fi
+	lan=$(lan_interface)
+	ip -4 address show dev "$lan" 2>/dev/null | grep -q 'inet ' || return 1
+	ip -4 route show default dev "$lan" 2>/dev/null | grep -q '^default ' || return 1
+	[ "$(radios_up)" -ge "$AB_RADIOS" ] || return 1
+	[ "$1" != ab ] || [ "$AB_VAULT" != 1 ] || [ "$(cat "$BOARD_DATA_STATUS" 2>/dev/null)" = vault ] || return 1
+	! ab_hook healthy_extra || "ab_${AB_FAMILY}_healthy_extra"
+}
+
+wait_healthy() {
+	local attempt=0 tries=${AB_GUARD_TRIES:-${AB_HEALTH_TRIES:-60}}
+	while [ "$attempt" -lt "$tries" ]; do
+		healthy "$1" && return 0
+		attempt=$((attempt + 1))
+		sleep "$PAUSE"
+	done
+	return 1
+}
+
+# The validated one-OEM/one-OpenWrt guard: OpenWrt in one slot, the stock
+# firmware (U-Boot image=) in the other. After a healthy start, re-arm the
+# one-shot that restores the stock default before booting OpenWrt again.
+legacy_guard() {
+	local slot bootcmd image
+	slot=$(ab_running_slot 2>/dev/null) || return 0
+	bootcmd=$(ab_guarded_command "$slot") || return 1
+
+	if wait_healthy legacy; then
+		[ "$(ab_getenv bootcmd)" = "$AB_STOCK_BOOTCMD" ] || {
+			log 'bootcmd changed independently; leaving it alone'
+			return 1
+		}
+		# Families whose stock U-Boot has no image variable (Thor) skip this.
+		image=$(ab_getenv image)
+		[ -z "$image" ] || [ "$image" = "$((1 - slot))" ] || {
+			log "U-Boot image is not the stock firmware's slot $((1 - slot)); leaving it alone"
+			return 1
+		}
+		ab_setenv changing_bootcmd 1 || return 1
+		ab_setenv bootcmd "$bootcmd" || return 1
+		log "healthy; guarded OpenWrt boot of slot $slot rearmed"
+		return 0
+	fi
+	# The guarded one-shot restored the stock default before booting, so a
+	# reboot returns to the stock firmware. A committed OpenWrt default (a
+	# single-bank install) would only boot OpenWrt again, every few minutes.
+	[ "$(ab_getenv bootcmd)" = "$AB_STOCK_BOOTCMD" ] || {
+		log 'startup checks failed, but the default boot is not the stock firmware; not rebooting'
+		return 1
+	}
+	log 'startup checks failed; rebooting to OEM'
+	do_reboot
+}
+
+commit_trial() {
+	local slot="$1" batch=/tmp/cambium-ab-guard.$$ rc=0
+	printf "${AB_ENV}_ab_confirmed %s\n${AB_ENV}_ab_state confirmed\nimage %s\n" "$slot" "$slot" > "$batch"
+	# A committed switch supersedes any earlier failure.
+	printf "${AB_ENV}_ab_target\n${AB_ENV}_ab_last_failure\n" >> "$batch"
+	ab_setenv_batch "$batch" || rc=1
+	rm -f "$batch"
+	[ "$rc" = 0 ] && ab_setenv bootcmd "run ${AB_ENV}_stable$slot" || {
+		log "could not commit slot $slot; the old bank stays the default"
+		return 1
+	}
+	log "slot $slot healthy; it is now the default, with slot $((1 - slot)) as fallback"
+}
+
+record_rollback() {
+	local batch=/tmp/cambium-ab-guard.$$
+	printf "${AB_ENV}_ab_state rolled-back\n${AB_ENV}_ab_last_failure %s\n" "$1" > "$batch"
+	echo ${AB_ENV}_ab_target >> "$batch"
+	ab_setenv_batch "$batch"
+	rm -f "$batch"
+	log "rollback: $1"
+}
+
+ab_guard() {
+	local state target confirmed running
+	ab_identity || { log 'A/B identity check failed'; return 1; }
+	running=$AB_ACTIVE
+	state=$(ab_getenv ${AB_ENV}_ab_state)
+	target=$(ab_getenv ${AB_ENV}_ab_target)
+	confirmed=$(ab_getenv ${AB_ENV}_ab_confirmed)
+
+	case "$state" in
+	trial-started)
+		if [ "$running" != "$target" ]; then
+			record_rollback "slot $target did not boot; slot $running kept"
+			return 1
+		fi
+		if wait_healthy ab; then
+			commit_trial "$running"
+			return
+		fi
+		# bootcmd already boots the old bank first: record, then return to it.
+		record_rollback "slot $running failed its health checks"
+		do_reboot
+		;;
+	armed)
+		log "slot $target is armed for a trial on the next boot"
+		;;
+	*)
+		if [ "$running" != "$confirmed" ] && [ "$state" != fallback ]; then
+			local batch=/tmp/cambium-ab-guard.$$
+			printf "${AB_ENV}_ab_state fallback\n${AB_ENV}_ab_last_failure %s\n" \
+				"confirmed slot $confirmed did not boot; running slot $running" > "$batch"
+			ab_setenv_batch "$batch"
+			rm -f "$batch"
+			log "confirmed slot $confirmed did not boot; running fallback slot $running"
+		fi
+		;;
+	esac
+}
+
+main() {
+	ab_family || return 0
+	if ab_hook takeover; then
+		"ab_${AB_FAMILY}_takeover"
+		case $? in
+		0) return 0 ;;
+		1) return 1 ;;
+		esac
+	fi
+	if ab_converted; then
+		ab_guard
+	elif [ "$AB_LAYOUT" != pair ]; then
+		legacy_guard
+	fi
+}
+
+[ -n "${AB_GUARD_SOURCE_ONLY:-}" ] || main

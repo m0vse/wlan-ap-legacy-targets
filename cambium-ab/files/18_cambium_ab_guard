@@ -1,0 +1,9 @@
+#!/bin/sh
+# Run the A/B boot guard on Cambium images whose family has an A/B module.
+
+. /lib/functions/system.sh
+. /lib/functions/cambium-ab.sh
+
+ab_family || exit 0
+/etc/init.d/cambium-ab-guard enable
+exit 0
