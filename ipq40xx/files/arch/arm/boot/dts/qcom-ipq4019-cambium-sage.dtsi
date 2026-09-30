@@ -301,7 +301,8 @@
 };
 
 &gmac0 {
-	qcom,phy_mdio_addr = <4>;
+	/* External switch port 4 is MDIO PHY address 3 in the legacy ESS driver. */
+	qcom,phy_mdio_addr = <3>;
 	qcom,poll_required = <1>;
 	qcom,forced_speed = <1000>;
 	qcom,forced_duplex = <1>;
