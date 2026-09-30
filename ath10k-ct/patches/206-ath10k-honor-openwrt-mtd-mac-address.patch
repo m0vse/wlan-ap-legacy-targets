@@ -7,7 +7,9 @@ does not use that extension, causing ath10k to reject the factory address
 and choose a random one.
 
 Use the OF helper first when probing a device-tree device, while retaining
-the generic helper as a fallback for other firmware descriptions.
+the generic helper as a fallback for other firmware descriptions.  Some old
+ath10k-ct paths still reach mac80211 registration with an invalid address, so
+repeat the OF lookup immediately before validating the permanent address.
 
 --- a/ath10k-5.7/core.c
 +++ b/ath10k-5.7/core.c
@@ -42,3 +44,31 @@ the generic helper as a fallback for other firmware descriptions.
  
  	ret = ath10k_core_init_firmware_features(ar);
  	if (ret) {
+
+--- a/ath10k-5.7/mac.c
++++ b/ath10k-5.7/mac.c
+@@ -11,6 +11,7 @@
+ #include <linux/bitfield.h>
+ #include <linux/ctype.h>
+ #include <linux/etherdevice.h>
++#include <linux/of_net.h>
+ #include <linux/ratelimit.h>
+ #include <linux/vmalloc.h>
+ #include <linux/average.h>
+@@ -10105,6 +10106,17 @@ int ath10k_mac_register(struct ath10k *a
+ 	void *channels;
+ 	int ret;
+ 
++	/* Retry the OF lookup at the point where mac80211's permanent address
++	 * is validated. OpenWrt's legacy MTD helper populates this property.
++	 */
++	if (!is_valid_ether_addr(ar->mac_addr) && ar->dev->of_node) {
++		const void *mac = of_get_mac_address(ar->dev->of_node);
++
++		if (!IS_ERR_OR_NULL(mac))
++			ether_addr_copy(ar->mac_addr, mac);
++	}
++
+ 	if (!is_valid_ether_addr(ar->mac_addr)) {
+ 		ath10k_warn(ar, "invalid MAC address; choosing random\n");
+ 		eth_random_addr(ar->mac_addr);
