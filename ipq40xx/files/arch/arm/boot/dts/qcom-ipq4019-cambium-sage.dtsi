@@ -254,9 +254,20 @@
 			};
 
 			art: partition@170000 {
+				compatible = "nvmem-cells";
+				#address-cells = <1>;
+				#size-cells = <1>;
 				label = "0:ART";
 				reg = <0x170000 0x010000>;
 				read-only;
+
+				wifi0_mac: macaddr@1006 {
+					reg = <0x1006 0x6>;
+				};
+
+				wifi1_mac: macaddr@5006 {
+					reg = <0x5006 0x6>;
+				};
 			};
 
 			partition@180000 {
@@ -312,10 +323,14 @@
 
 &wifi0 {
 	mtd-mac-address = <&art 0x1006>;
+	nvmem-cells = <&wifi0_mac>;
+	nvmem-cell-names = "mac-address";
 	status = "okay";
 };
 
 &wifi1 {
 	mtd-mac-address = <&art 0x5006>;
+	nvmem-cells = <&wifi1_mac>;
+	nvmem-cell-names = "mac-address";
 	status = "okay";
 };
