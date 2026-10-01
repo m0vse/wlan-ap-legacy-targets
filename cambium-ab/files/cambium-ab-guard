@@ -38,6 +38,9 @@ lan_interface() {
 	for section in $(uci -q show network 2>/dev/null |
 		sed -n 's/^network\.\([^.=]*\)=interface$/\1/p'); do
 		case "$section" in up*) ;; *) continue ;; esac
+		# up_none is the unaddressed parent bridge, not management DHCP.
+		[ "$(uci -q get "network.$section.proto" 2>/dev/null)" = none ] && continue
+		[ "$(uci -q get "network.$section.disabled" 2>/dev/null)" = 1 ] && continue
 		lan=$(uci -q get "network.$section.device" 2>/dev/null)
 		[ -n "$lan" ] || lan=$(uci -q get "network.$section.ifname" 2>/dev/null)
 		[ -n "$lan" ] || lan=$section
