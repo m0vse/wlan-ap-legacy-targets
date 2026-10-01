@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# The Sage family image spans multiple AP models. Report the concrete model
+# to OpenWiFi while retaining the family image and A/B layout identity.
+[ -d "${UCENTRAL_DIR:=/etc/ucentral}" ] || exit 0
+
+board=${CAMBIUM_BOARD_NAME:-}
+[ -n "$board" ] || {
+	. /lib/functions/system.sh
+	board=$(board_name)
+}
+
+case "$board" in
+	cambium,e410|cambiumnetworks,e410) compatible=cambium_e410 ;;
+	cambiumnetworks,e410b) compatible=cambium_e410b ;;
+	*) exit 0 ;;
+esac
+
+printf '%s\n' "$compatible" > "$UCENTRAL_DIR/compatible"

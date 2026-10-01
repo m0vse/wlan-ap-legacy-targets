@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cambium-ab
-PKG_RELEASE:=7
+PKG_RELEASE:=8
 PKG_LICENSE:=GPL-2.0-only
 PKG_MAINTAINER:=Phil Taylor <phil@m0vse.uk>
 
@@ -39,7 +39,7 @@ define Package/cambium-ab/install
 	$(INSTALL_BIN) ./files/cambium-ab-status $(1)/usr/sbin/
 	$(INSTALL_BIN) ./files/cambium-ab-guard.init $(1)/etc/init.d/cambium-ab-guard
 	$(INSTALL_BIN) ./files/18_cambium_ab_guard $(1)/etc/uci-defaults/
-	$(INSTALL_DATA) ./files/ucentral-compatible $(1)/etc/ucentral/compatible
+	$(INSTALL_BIN) ./files/19_cambium_openwifi_identity $(1)/etc/uci-defaults/
 	$(INSTALL_DATA) ./files/ucentral-platform $(1)/etc/ucentral/platform
 endef
 
