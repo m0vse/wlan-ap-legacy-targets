@@ -28,13 +28,27 @@ do_reboot() {
 # a writable overlay, wired DHCP with a default route, the family's required
 # radios and, on A/B for a family that keeps one, a valid device-data vault.
 # OpenWISP is deliberately not required.
-# The LAN interface to check: the device the lan network is configured on
-# (br-lan.1 once VLAN filtering is set up), so a missing VLAN bridge fails
-# the check instead of passing on br-lan. Without a readable configuration,
-# the first of the module's AB_LAN candidates that exists, else the last.
+# The management interface to check.  OpenWiFi's renderer names upstream
+# interface sections up*, so resolve their configured device (including a
+# tagged VLAN).  network.lan is retained for stock OpenWrt configurations.
+# If neither is readable, use the current default route before falling back to
+# the family's AB_LAN candidates.
 lan_interface() {
-	local lan
+	local lan section
+	for section in $(uci -q show network 2>/dev/null |
+		sed -n 's/^network\.\([^.=]*\)=interface$/\1/p'); do
+		case "$section" in up*) ;; *) continue ;; esac
+		lan=$(uci -q get "network.$section.device" 2>/dev/null)
+		[ -n "$lan" ] || lan=$(uci -q get "network.$section.ifname" 2>/dev/null)
+		[ -n "$lan" ] || lan=$section
+		echo "$lan"
+		return
+	done
 	lan=$(uci -q get network.lan.device 2>/dev/null)
+	[ -n "$lan" ] && { echo "$lan"; return; }
+	lan=$(ip -4 route show default 2>/dev/null | awk '
+		$1 == "default" { for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }
+	')
 	[ -n "$lan" ] && { echo "$lan"; return; }
 	for lan in $AB_LAN; do
 		[ -d "${AB_SYS_NET:-/sys/class/net}/$lan" ] && break
