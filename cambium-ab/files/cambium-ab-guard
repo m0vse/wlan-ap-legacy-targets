@@ -61,21 +61,37 @@ radios_up() {
 	echo "$n"
 }
 
+unhealthy() {
+	AB_HEALTH_FAILURE="$*"
+	return 1
+}
+
 healthy() {
-	local lan
-	ab_identity >/dev/null 2>&1 || return 1
+	local lan radios vault
+	AB_HEALTH_FAILURE=
+	ab_identity >/dev/null 2>&1 || { unhealthy 'A/B identity check failed'; return 1; }
 	if ab_hook root_healthy; then
-		"ab_${AB_FAMILY}_root_healthy" || return 1
+		"ab_${AB_FAMILY}_root_healthy" || { unhealthy 'root/overlay is not writable and complete'; return 1; }
 	else
-		[ -e "${AB_DEV:-/dev}/ubiblock0_1" ] || return 1
-		grep -q ' /overlay ubifs rw' "${AB_PROC_MOUNTS:-/proc/mounts}" || return 1
+		[ -e "${AB_DEV:-/dev}/ubiblock0_1" ] || { unhealthy 'root block device is missing'; return 1; }
+		grep -q ' /overlay ubifs rw' "${AB_PROC_MOUNTS:-/proc/mounts}" ||
+			{ unhealthy 'overlay is not a writable UBIFS mount'; return 1; }
 	fi
 	lan=$(lan_interface)
-	ip -4 address show dev "$lan" 2>/dev/null | grep -q 'inet ' || return 1
-	ip -4 route show default dev "$lan" 2>/dev/null | grep -q '^default ' || return 1
-	[ "$(radios_up)" -ge "$AB_RADIOS" ] || return 1
-	[ "$1" != ab ] || [ "$AB_VAULT" != 1 ] || [ "$(cat "$BOARD_DATA_STATUS" 2>/dev/null)" = vault ] || return 1
-	! ab_hook healthy_extra || "ab_${AB_FAMILY}_healthy_extra"
+	[ -n "$lan" ] || { unhealthy 'no configured management interface'; return 1; }
+	ip -4 address show dev "$lan" 2>/dev/null | grep -q 'inet ' ||
+		{ unhealthy "management interface $lan has no IPv4 address"; return 1; }
+	ip -4 route show default dev "$lan" 2>/dev/null | grep -q '^default ' ||
+		{ unhealthy "management interface $lan has no default route"; return 1; }
+	radios=$(radios_up)
+	[ "$radios" -ge "$AB_RADIOS" ] ||
+		{ unhealthy "only $radios of $AB_RADIOS required radios are present"; return 1; }
+	if [ "$1" = ab ] && [ "$AB_VAULT" = 1 ]; then
+		vault=$(cat "$BOARD_DATA_STATUS" 2>/dev/null)
+		[ "$vault" = vault ] || { unhealthy "device-data vault status is ${vault:-missing}"; return 1; }
+	fi
+	! ab_hook healthy_extra || "ab_${AB_FAMILY}_healthy_extra" ||
+		{ unhealthy "$AB_FAMILY extra health check failed"; return 1; }
 }
 
 wait_healthy() {
@@ -165,7 +181,7 @@ ab_guard() {
 			return
 		fi
 		# bootcmd already boots the old bank first: record, then return to it.
-		record_rollback "slot $running failed its health checks"
+		record_rollback "slot $running failed: ${AB_HEALTH_FAILURE:-health checks did not pass}"
 		do_reboot
 		;;
 	armed)
