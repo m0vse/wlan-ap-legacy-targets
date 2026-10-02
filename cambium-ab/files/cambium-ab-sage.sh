@@ -141,11 +141,42 @@ ab_sage_volume_bytes() {
 	echo $((lebs * lebsize))
 }
 
-# Existing stock/transition installations have 372 rootfs LEBs per pair.
-# Reserve 67 of those LEBs (about 8 MiB) for this pair's writable overlay.
-# Shrink only the inactive volume; its UBI ID must remain 1 or 3.
-AB_SAGE_ROOT_LEBS=305
+# Keep the 67-LEB overlay; leave 20 LEBs for the shared certificate store
+# even on stock layouts with nvram=187 and only one independently free LEB.
+# Reclaim only the inactive rootfs which this upgrade is replacing.
+AB_SAGE_ROOT_LEBS=285
 AB_SAGE_DATA_LEBS=67
+
+ab_sage_inactive_root() {
+	local vol mounts=${AB_PROC_MOUNTS:-/proc/mounts} sys=${AB_UBI_SYS:-/sys/class/ubi}
+	case "$AB_ACTIVE:$AB_TARGET" in 0:1|1:0) ;; *) return 1 ;; esac
+	vol=$(ab_ubi_volume "$AB_ACTIVE_UBI" "rootfs$AB_TARGET") || return 1
+	[ "${vol##*_}" = "$((AB_TARGET * 2 + 1))" ] || return 1
+	[ "$(cat "$sys/$vol/type")" = dynamic ] || return 1
+	[ "$(cat "$sys/$vol/usable_eb_size")" = "$AB_LEB" ] || return 1
+	[ -r "$mounts" ] || return 1
+	! awk -v node="${AB_DEV:-/dev}/$vol" -v block="${AB_DEV:-/dev}/ubiblock${vol#ubi}" \
+		-v named="$AB_ACTIVE_UBI:rootfs$AB_TARGET" '$1==node || $1==block || $1==named { busy=1 } END { exit !busy }' "$mounts" || return 1
+	[ ! -e "${AB_BLOCK_SYS:-/sys/class/block}/ubiblock${vol#ubi}" ] || return 1
+	echo "$vol"
+}
+
+# Read-only potential capacity, not permission to shrink a live filesystem.
+# The write path first clears ONLY the inactive replacement volume.
+ab_sage_certificate_capacity() {
+	local sys=${AB_UBI_SYS:-/sys/class/ubi} vol roots free overlay need=0
+	vol=$(ab_sage_inactive_root) || return 1
+	roots=$(cat "$sys/$vol/reserved_ebs") || return 1
+	free=$(cat "$sys/$AB_ACTIVE_UBI/avail_eraseblocks") || return 1
+	case "$roots:$free" in *[!0-9:]*|:*|*:) return 1 ;; esac
+	[ "$roots" -ge "$AB_SAGE_ROOT_LEBS" ] || return 1
+	if overlay=$(ab_ubi_volume "$AB_ACTIVE_UBI" "rootfs_data$AB_TARGET"); then
+		[ "$(cat "$sys/$overlay/reserved_ebs")" -ge "$AB_SAGE_DATA_LEBS" ] || return 1
+	else
+		need=$AB_SAGE_DATA_LEBS
+	fi
+	[ $((free + roots - AB_SAGE_ROOT_LEBS - need)) -ge 20 ]
+}
 
 ab_sage_root_format() {
 	local vol
@@ -172,6 +203,10 @@ ab_sage_image_fits() {
 	[ "$root_lebs" -ge "$AB_SAGE_ROOT_LEBS" ] &&
 		[ "$2" -le $((AB_SAGE_ROOT_LEBS * AB_LEB)) ] ||
 		ab_fail "SquashFS needs at most $AB_SAGE_ROOT_LEBS LEBs in rootfs$AB_TARGET" || return 1
+	ab_sage_inactive_root >/dev/null || ab_fail 'inactive Sage rootfs is unsafe or busy' || return 1
+	if ! ab_ubi_volume "$AB_ACTIVE_UBI" certificates >/dev/null; then
+		ab_sage_certificate_capacity || ab_fail 'not enough inactive-only capacity for the shared certificate store' || return 1
+	fi
 	if data_lebs=$(ab_ubi_volume "$AB_ACTIVE_UBI" "rootfs_data$AB_TARGET"); then
 		data_lebs=$(cat "${AB_UBI_SYS:-/sys/class/ubi}/$data_lebs/reserved_ebs") || return 1
 		[ "$data_lebs" -ge "$AB_SAGE_DATA_LEBS" ] ||
@@ -185,9 +220,12 @@ ab_sage_image_fits() {
 
 ab_sage_prepare_overlay() {
 	local dev=${AB_DEV:-/dev} ubi=$AB_ACTIVE_UBI slot=$AB_TARGET rootvol root_lebs datavol
-	rootvol=$(ab_ubi_volume "$ubi" "rootfs$slot") || return 1
+	rootvol=$(ab_sage_inactive_root) || return 1
 	root_lebs=$(cat "${AB_UBI_SYS:-/sys/class/ubi}/$rootvol/reserved_ebs") || return 1
 	if [ "$root_lebs" -gt "$AB_SAGE_ROOT_LEBS" ]; then
+		# Never shrink an existing UBIFS superblock. This is the inactive
+		# root being overwritten; clear its old payload before resizing.
+		ab_step "clear inactive rootfs$slot before resize" ubiupdatevol -t "$dev/$rootvol" || return 1
 		ab_step "shrink inactive rootfs$slot" ubirsvol "$dev/$ubi" -n "${rootvol##*_}" -s $((AB_SAGE_ROOT_LEBS * AB_LEB)) || return 1
 		[ "$(ab_ubi_volume "$ubi" "rootfs$slot")" = "$rootvol" ] || {
 			AB_STEP_ERROR="rootfs$slot changed UBI volume ID during resize"
