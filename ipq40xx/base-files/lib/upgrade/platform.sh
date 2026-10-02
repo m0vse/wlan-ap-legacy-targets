@@ -1,8 +1,17 @@
 PART_NAME=firmware
 REQUIRE_IMAGE_METADATA=1
 
-RAMFS_COPY_BIN='fw_printenv fw_setenv head sha256sum tr'
+RAMFS_COPY_BIN='fw_printenv fw_setenv head sha256sum tr cmp mktemp'
 RAMFS_COPY_DATA='/etc/fw_env.config /var/lock/fw_printenv.lock'
+
+# The common export hook deliberately does nothing for Sage's shared store.
+# Keep the same ABI/order as other OpenWiFi A/B images, with no bank-local
+# certificate allocation, copy or erase on this pair layout.
+platform_pre_upgrade() {
+	if command -v ab_family >/dev/null && ab_family; then
+		ab_upgrade_preflight && ab_certificate_export || exit 1
+	fi
+}
 
 platform_check_image() {
 	if command -v ab_family >/dev/null && ab_family; then
@@ -10,9 +19,7 @@ platform_check_image() {
 		return
 	fi
 	case "$(board_name)" in
-	cambium,e410|\
-	cambiumnetworks,e410|\
-	cambiumnetworks,e410b)
+	cambium,*|cambiumnetworks,*)
 		echo "Cambium Sage A/B support is unavailable; refusing to write flash"
 		return 1
 		;;
@@ -71,9 +78,7 @@ platform_do_upgrade() {
 		return
 	fi
 	case "$(board_name)" in
-	cambium,e410|\
-	cambiumnetworks,e410|\
-	cambiumnetworks,e410b)
+	cambium,*|cambiumnetworks,*)
 		echo "Cambium Sage A/B support is unavailable; refusing to write flash"
 		return 1
 		;;

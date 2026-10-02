@@ -25,6 +25,9 @@
 # AB_HEALTH_TRIES (5-second health checks before a boot counts as failed;
 # default 60), AB_MARKER (0: this U-Boot needs no changing_bootcmd marker)
 # and AB_ROOT_MAGIC (the root image's first four bytes as hex, or hsqs).
+# AB_ENV_PART names the 64 KiB environment partition (default 0:APPSBLENV).
+# Raw-kernel families may also supply check_kernel, oem_hash, convert_target
+# and healthy_boot hooks; they still use the shared trial and boot guard.
 #
 # A family whose slots are not two MTD banks (Sage: volume pairs in one UBI
 # device, AB_LAYOUT=pair) also defines ab_<family>_identity (sets the slot
@@ -52,6 +55,10 @@ ab_board() {
 	for family in ${AB_FAMILIES:-}; do
 		AB_QUALIFIED=0 AB_VAULT=0 AB_STOCK_BOOTCMD=bootipq AB_LAN=br-lan AB_RADIOS=0 AB_RADIO_DEVICE=
 		AB_LAYOUT=banks AB_MARKER=1 AB_ROOT_MAGIC=hsqs AB_HEALTH_TRIES=60
+		AB_ENV_PART=0:APPSBLENV
+		# OpenWiFi-specific modules opt into the certificate-volume ABI.
+		# Modules survive stage2's /lib/functions/*.sh copy; preinit does not.
+		AB_CERTIFICATE_LEBS=0
 		if "ab_${family}_board" "$1"; then
 			AB_FAMILY=$family
 			return 0
@@ -247,14 +254,14 @@ ab_trial_command() {
 	echo "setenv bootcmd run ${AB_ENV}_stable$1; setenv image $1; setenv ${AB_ENV}_ab_state trial-started; saveenv; run ${AB_ENV}_boot$2; run ${AB_ENV}_boot$1"
 }
 
-# fw_printenv/fw_setenv against the verified 64 KiB 0:APPSBLENV mapping.
+# fw_printenv/fw_setenv against the family's verified 64 KiB mapping.
 ab_env_config() {
 	local idx
 	[ -z "${AB_ENV_CONFIG:-}" ] || return 0
-	idx=$(ab_mtd_index 0:APPSBLENV)
-	[ -n "$idx" ] || { echo 'cambium-ab: no 0:APPSBLENV partition' >&2; return 1; }
-	[ "$(ab_mtd_geometry 0:APPSBLENV | cut -d' ' -f1)" = 00010000 ] || {
-		echo 'cambium-ab: unexpected 0:APPSBLENV size' >&2
+	idx=$(ab_mtd_index "${AB_ENV_PART:-0:APPSBLENV}")
+	case "$idx" in ''|*[!0-9]*) echo 'cambium-ab: missing or duplicate environment partition' >&2; return 1 ;; esac
+	[ "$(ab_mtd_geometry "${AB_ENV_PART:-0:APPSBLENV}" | cut -d' ' -f1)" = 00010000 ] || {
+		echo 'cambium-ab: unexpected environment partition size' >&2
 		return 1
 	}
 	AB_ENV_CONFIG=/tmp/cambium-ab-fw_env.config

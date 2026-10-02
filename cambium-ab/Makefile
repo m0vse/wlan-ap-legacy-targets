@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cambium-ab
-PKG_RELEASE:=11
+PKG_RELEASE:=16
 PKG_LICENSE:=GPL-2.0-only
 PKG_MAINTAINER:=Phil Taylor <phil@m0vse.uk>
 
@@ -34,6 +34,7 @@ define Package/cambium-ab/install
 	$(INSTALL_DATA) ./files/cambium-ab-sage.sh $(1)/lib/functions/cambium-ab-sage.sh
 	$(INSTALL_DATA) ./files/cambium-sage.sh $(1)/lib/functions/cambium-sage.sh
 	$(INSTALL_DATA) ./files/cambium-ab-upgrade.sh $(1)/lib/upgrade/cambium-ab.sh
+	$(INSTALL_DATA) ./files/cambium-ab-certificates.sh $(1)/lib/upgrade/cambium-ab-certificates.sh
 	$(INSTALL_BIN) ./files/cambium-ab-guard $(1)/usr/sbin/
 	$(INSTALL_BIN) ./files/cambium-ab-convert $(1)/usr/sbin/
 	$(INSTALL_BIN) ./files/cambium-ab-status $(1)/usr/sbin/

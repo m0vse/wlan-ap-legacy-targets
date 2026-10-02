@@ -40,6 +40,8 @@ ab_sage_board() {
 	AB_NAME=Sage
 	AB_ENV=sage
 	AB_LAYOUT=pair
+	# Sage certificates live in one shared volume, never per-bank snapshots.
+	AB_CERTIFICATE_LEBS=0
 	AB_MARKER=0
 	AB_IMAGE_DIR=$SAGE_BOARD_DIR
 	AB_ROOT_MAGIC=hsqs

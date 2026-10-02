@@ -7,12 +7,15 @@
 # /lib/functions/cambium-ab.sh.
 
 . "${CAMBIUM_AB_LIB:-/lib/functions/cambium-ab.sh}"
+[ ! -f "${CAMBIUM_AB_CERTIFICATE_LIB:-/lib/upgrade/cambium-ab-certificates.sh}" ] || \
+	. "${CAMBIUM_AB_CERTIFICATE_LIB:-/lib/upgrade/cambium-ab-certificates.sh}"
 
 # The image directory (AB_IMAGE_DIR) and the bank's usable LEBs
 # (AB_BANK_LEBS) come from the family module's board table.
 AB_VAULT_LEBS=8
 # Smallest writable overlay a new bank may get (8 MiB).
 AB_MIN_DATA_LEBS=67
+AB_CERTIFICATE_POLICY_VERSION=1
 
 ab_lebs() {
 	echo $(( ($1 + AB_LEB - 1) / AB_LEB ))
@@ -21,6 +24,16 @@ ab_lebs() {
 # LEBs the device-data vault takes in a bank: none for a family without one.
 ab_vault_lebs() {
 	if [ "$AB_VAULT" = 1 ]; then echo "$AB_VAULT_LEBS"; else echo 0; fi
+}
+
+# OpenWiFi's preinit certificate store needs 20 LEBs. Reserve it before
+# rootfs_data consumes the bank and before configuration restoration formats
+# UBIFS. Shrinking that formatted filesystem on first boot corrupts it.
+ab_certificate_lebs() {
+	case "${AB_CERTIFICATE_LEBS:-0}" in
+	0|20) echo "${AB_CERTIFICATE_LEBS:-0}" ;;
+	*) ab_fail "invalid certificate-volume policy: expected 0 or 20 LEBs"; return 1 ;;
+	esac
 }
 
 ab_fail() {
@@ -55,10 +68,14 @@ ab_image_extract() {
 	AB_KERNEL=$AB_WORK/$AB_IMAGE_DIR/kernel
 	AB_ROOT=$AB_WORK/$AB_IMAGE_DIR/root
 	magic=$(hexdump -n 4 -v -e '4/1 "%02x"' "$AB_KERNEL")
+	if ab_hook check_kernel; then
+		"ab_${AB_FAMILY}_check_kernel" "$AB_KERNEL" || return 1
+	else
 	[ "$magic" = d00dfeed ] || ab_fail "kernel is not a FIT image" || return 1
 	# A FIT node name follows the FDT_BEGIN_NODE token, which ends in 0x01.
 	tr '\000' '\n' < "$AB_KERNEL" | grep -q "^$(printf '\001')$AB_FIT\$" ||
 		ab_fail "FIT lacks $AB_FIT for $AB_MODEL" || return 1
+	fi
 	if [ "$AB_ROOT_MAGIC" = hsqs ]; then
 		[ "$(head -c 4 "$AB_ROOT")" = hsqs ] || ab_fail "root is not SquashFS" || return 1
 	else
@@ -72,7 +89,7 @@ ab_image_extract() {
 		return 0
 	fi
 	[ $(( $(ab_lebs "$AB_KERNEL_SIZE") + $(ab_lebs "$AB_ROOT_SIZE") + \
-		$(ab_vault_lebs) + AB_MIN_DATA_LEBS )) -le "$AB_BANK_LEBS" ] ||
+		$(ab_vault_lebs) + $(ab_certificate_lebs) + AB_MIN_DATA_LEBS )) -le "$AB_BANK_LEBS" ] ||
 		ab_fail "image does not fit this $AB_MODEL bank ($AB_BANK_LEBS LEBs) with the vault and overlay" || return 1
 }
 
@@ -80,6 +97,7 @@ ab_image_extract() {
 ab_upgrade_preflight() {
 	local state
 	ab_identity || return 1
+	ab_certificate_lebs >/dev/null || return 1
 	# A pair-layout family (Sage) has no conversion step: writing the other
 	# slot replaces whatever it held, as its first upgrade always has.
 	[ "$AB_LAYOUT" = pair ] || ab_converted ||
@@ -126,8 +144,17 @@ ab_verify_volume() {
 # if the family keeps one, and rootfs_data (2) from the remaining space. Sets AB_TARGET_UBI.
 ab_prepare_bank() {
 	local kernel_size="$1" root_size="$2" dev=${AB_DEV:-/dev} data ubi
+	local certificate_lebs
+	certificate_lebs=$(ab_certificate_lebs) || return 1
 	if ab_ubi_for_mtd "$AB_TARGET_MTD" >/dev/null; then
-		ab_step "ubidetach mtd$AB_TARGET_MTD" ubidetach -m "$AB_TARGET_MTD" || return 1
+		# Some ubidetach versions report EINVAL after a successful detach.
+		# Never format an attached bank, even if the command reported success.
+		ab_step "ubidetach mtd$AB_TARGET_MTD" ubidetach -m "$AB_TARGET_MTD" || :
+		if ab_ubi_for_mtd "$AB_TARGET_MTD" >/dev/null; then
+			AB_STEP_ERROR=${AB_STEP_ERROR:-"mtd$AB_TARGET_MTD remains attached after ubidetach"}
+			return 1
+		fi
+		AB_STEP_ERROR=
 	fi
 	ab_step "ubiformat mtd$AB_TARGET_MTD" ubiformat "$dev/mtd$AB_TARGET_MTD" -y -q || return 1
 	ab_step "ubiattach mtd$AB_TARGET_MTD" ubiattach -m "$AB_TARGET_MTD" || return 1
@@ -145,6 +172,11 @@ ab_prepare_bank() {
 		ab_step "ubimkvol $ubi vault" ubimkvol "$dev/$ubi" -n 3 -N cambium_device_data \
 			-s $((AB_VAULT_LEBS * AB_LEB)) &&
 			ab_step "mknod ${ubi}_3" ab_ubi_node "${ubi}_3" || return 1
+	fi
+	if [ "$certificate_lebs" -gt 0 ]; then
+		ab_step "ubimkvol $ubi certificates" ubimkvol "$dev/$ubi" -n 4 -N certificates \
+			-s $((certificate_lebs * AB_LEB)) &&
+			ab_step "mknod ${ubi}_4" ab_ubi_node "${ubi}_4" || return 1
 	fi
 	ab_step "ubimkvol $ubi rootfs_data" ubimkvol "$dev/$ubi" -n 2 -N rootfs_data -m &&
 		ab_step "mknod ${ubi}_2" ab_ubi_node "${ubi}_2" || return 1
@@ -184,6 +216,13 @@ cambium_ab_do_upgrade() {
 	ab_upgrade_preflight || return 1
 	ab_image_extract "$1" || return 1
 
+	# stage2 must prove the private snapshot survived the RAM copy BEFORE
+	# recording writes or erasing any inactive-bank data.
+	if [ "$(ab_certificate_lebs)" = 20 ] && [ "$AB_LAYOUT" = banks ]; then
+		type ab_certificate_validate_snapshot >/dev/null 2>&1 && ab_certificate_validate_snapshot ||
+			{ ab_fail 'RAM-stage certificate snapshot validation failed; no bank was written'; return 1; }
+	fi
+
 	# Record the write before touching the bank. bootcmd still boots the
 	# running bank first, so an interrupted write never loses it.
 	printf "${AB_ENV}_ab_state writing\n${AB_ENV}_ab_target %s\n" "$AB_TARGET" > "$batch"
@@ -193,6 +232,10 @@ cambium_ab_do_upgrade() {
 	echo "cambium-ab: writing slot $AB_TARGET ($AB_TARGET_PART) from slot $AB_ACTIVE"
 	if ab_hook write_target; then
 		"ab_${AB_FAMILY}_write_target" || return 1
+		if [ "$(ab_certificate_lebs)" = 20 ]; then
+			type ab_certificate_restore >/dev/null 2>&1 && ab_certificate_restore ||
+				{ ab_record_failure write-failed 'cannot restore the certificate store'; return 1; }
+		fi
 		sync
 		ab_arm_trial ||
 			{ ab_record_failure write-failed "cannot arm the trial of slot $AB_TARGET"; return 1; }
@@ -209,6 +252,10 @@ cambium_ab_do_upgrade() {
 		{ AB_STEP_ERROR=; ab_record_failure write-failed "slot $AB_TARGET readback mismatch"; return 1; }
 	[ "$AB_VAULT" != 1 ] || ab_copy_vault ||
 		{ ab_record_failure write-failed "cannot copy the device-data vault"; return 1; }
+	if [ "$(ab_certificate_lebs)" = 20 ]; then
+		type ab_certificate_restore >/dev/null 2>&1 && ab_certificate_restore ||
+			{ ab_record_failure write-failed 'cannot restore the certificate store'; return 1; }
+	fi
 
 	if [ -n "${UPGRADE_BACKUP:-}" ]; then
 		CI_UBIPART=$AB_TARGET_PART nand_restore_config "$UPGRADE_BACKUP" ||

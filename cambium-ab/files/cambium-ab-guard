@@ -59,6 +59,32 @@ lan_interface() {
 	echo "$lan"
 }
 
+# Tagged OpenWiFi management may have its default route in ip4table, not
+# main. Match the selected device back to its UCI section; never accept an
+# unrelated default route merely because it exists in another table.
+lan_route_table() {
+	local device=$1 section configured table
+	for section in $(uci -q show network 2>/dev/null |
+		sed -n 's/^network\.\([^.=]*\)=interface$/\1/p'); do
+		case "$section" in up*|lan) ;; *) continue ;; esac
+		[ "$(uci -q get "network.$section.proto" 2>/dev/null)" = none ] && continue
+		[ "$(uci -q get "network.$section.disabled" 2>/dev/null)" = 1 ] && continue
+		configured=$(uci -q get "network.$section.device" 2>/dev/null)
+		[ -n "$configured" ] || configured=$(uci -q get "network.$section.ifname" 2>/dev/null)
+		[ -n "$configured" ] || configured=$section
+		[ "$configured" = "$device" ] || continue
+		table=$(uci -q get "network.$section.ip4table" 2>/dev/null)
+		case "$table" in
+		'') echo main ;;
+		[!A-Za-z0-9]*) return 1 ;;
+		*[!A-Za-z0-9_-]*) return 1 ;;
+		*) echo "$table" ;;
+		esac
+		return
+	done
+	echo main
+}
+
 # The Wi-Fi phys that count towards AB_RADIOS: all of them, or only those of
 # the device AB_RADIO_DEVICE names (the end of its /sys/devices path), so a
 # radio that is not a serving radio (the XV3-8's scanner) cannot stand in
@@ -84,7 +110,7 @@ unhealthy() {
 }
 
 healthy() {
-	local lan radios vault
+	local lan radios vault table
 	AB_HEALTH_FAILURE=
 	ab_identity >/dev/null 2>&1 || { unhealthy 'A/B identity check failed'; return 1; }
 	if ab_hook root_healthy; then
@@ -98,8 +124,14 @@ healthy() {
 	[ -n "$lan" ] || { unhealthy 'no configured management interface'; return 1; }
 	ip -4 address show dev "$lan" 2>/dev/null | grep -q 'inet ' ||
 		{ unhealthy "management interface $lan has no IPv4 address"; return 1; }
-	ip -4 route show default dev "$lan" 2>/dev/null | grep -q '^default ' ||
-		{ unhealthy "management interface $lan has no default route"; return 1; }
+	table=$(lan_route_table "$lan") ||
+		{ unhealthy "management interface $lan has an invalid routing table"; return 1; }
+	if [ "$table" = main ]; then
+		ip -4 route show default dev "$lan" 2>/dev/null
+	else
+		ip -4 route show table "$table" default dev "$lan" 2>/dev/null
+	fi | grep -q '^default ' ||
+		{ unhealthy "management interface $lan has no default route in table $table"; return 1; }
 	radios=$(radios_up)
 	[ "$radios" -ge "$AB_RADIOS" ] ||
 		{ unhealthy "only $radios of $AB_RADIOS required radios are present"; return 1; }
@@ -121,6 +153,38 @@ wait_healthy() {
 	return 1
 }
 
+# Capture only at the final failed trial, not at every health poll. The
+# bounded private snapshot survives rollback; never save UCI/JSON credentials
+# or full process arguments. Diagnostic failure must not prevent rollback.
+save_network_health() (
+	local dir=${AB_HEALTH_DIR:-/etc/ucentral} lan bridge prop pid
+	[ -d "$dir" ] || return 0
+	umask 077
+	lan=$(lan_interface)
+	{
+		printf 'failure=%s\nmanagement=%s\n' "$AB_HEALTH_FAILURE" "$lan"
+		date -u
+		bridge vlan show 2>&1
+		# BusyBox ip on these images does not support -d.
+		ip link show 2>&1
+		ip -4 addr show 2>&1
+		ip -4 route show 2>&1
+		for bridge in up down; do
+			for prop in vlan_filtering default_pvid; do
+				printf '%s.%s=' "$bridge" "$prop"
+				cat "${AB_SYS_NET:-/sys/class/net}/$bridge/bridge/$prop" 2>/dev/null || echo unavailable
+			done
+		done
+		# Section name and device can differ; inspect every logical interface.
+		ubus -t 2 call network.interface dump 2>&1
+		printf '\nDHCP client PIDs (no arguments):\n'
+		pgrep udhcpc 2>/dev/null || :
+		printf '\nNetwork log tail:\n'
+		logread 2>/dev/null | grep -Ei 'netifd|udhcpc|ess_edma|nss-dp|Link is (Up|Down)' | tail -n 100 | cut -c 1-200
+	} | head -c 12288 > "$dir/network-boot.health.tmp"
+	mv "$dir/network-boot.health.tmp" "$dir/network-boot.health" && sync
+)
+
 # The validated one-OEM/one-OpenWrt guard: OpenWrt in one slot, the stock
 # firmware (U-Boot image=) in the other. After a healthy start, re-arm the
 # one-shot that restores the stock default before booting OpenWrt again.
@@ -140,7 +204,8 @@ legacy_guard() {
 			log "U-Boot image is not the stock firmware's slot $((1 - slot)); leaving it alone"
 			return 1
 		}
-		ab_setenv changing_bootcmd 1 || return 1
+		! ab_hook healthy_boot || "ab_${AB_FAMILY}_healthy_boot" || return 1
+		[ "$AB_MARKER" != 1 ] || ab_setenv changing_bootcmd 1 || return 1
 		ab_setenv bootcmd "$bootcmd" || return 1
 		log "healthy; guarded OpenWrt boot of slot $slot rearmed"
 		return 0
@@ -158,6 +223,7 @@ legacy_guard() {
 
 commit_trial() {
 	local slot="$1" batch=/tmp/cambium-ab-guard.$$ rc=0
+	! ab_hook healthy_boot || "ab_${AB_FAMILY}_healthy_boot" || return 1
 	printf "${AB_ENV}_ab_confirmed %s\n${AB_ENV}_ab_state confirmed\nimage %s\n" "$slot" "$slot" > "$batch"
 	# A committed switch supersedes any earlier failure.
 	printf "${AB_ENV}_ab_target\n${AB_ENV}_ab_last_failure\n" >> "$batch"
@@ -198,6 +264,7 @@ ab_guard() {
 			return
 		fi
 		# bootcmd already boots the old bank first: record, then return to it.
+		save_network_health || :
 		record_rollback "slot $running failed: ${AB_HEALTH_FAILURE:-health checks did not pass}"
 		do_reboot
 		;;
@@ -205,6 +272,9 @@ ab_guard() {
 		log "slot $target is armed for a trial on the next boot"
 		;;
 	*)
+		if ab_hook healthy_boot && [ "$running" = "$confirmed" ]; then
+			wait_healthy ab && "ab_${AB_FAMILY}_healthy_boot" || return 1
+		fi
 		if [ "$running" != "$confirmed" ] && [ "$state" != fallback ]; then
 			local batch=/tmp/cambium-ab-guard.$$
 			printf "${AB_ENV}_ab_state fallback\n${AB_ENV}_ab_last_failure %s\n" \
