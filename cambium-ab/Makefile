@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=cambium-ab
-PKG_RELEASE:=17
+PKG_RELEASE:=18
 PKG_LICENSE:=GPL-2.0-only
 PKG_MAINTAINER:=Phil Taylor <phil@m0vse.uk>
 

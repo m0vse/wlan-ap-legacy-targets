@@ -12,6 +12,19 @@
 . "${CAMBIUM_SYSTEM_FUNCTIONS:-/lib/functions/system.sh}"
 . "${CAMBIUM_AB_LIB:-/lib/functions/cambium-ab.sh}"
 
+[ ! -f "${CAMBIUM_INSTALLER_HEALTH_LIB:-/lib/functions/cambium-installer-health.sh}" ] ||
+ . "${CAMBIUM_INSTALLER_HEALTH_LIB:-/lib/functions/cambium-installer-health.sh}"
+installer_healthy() {
+ local target
+ if command -v ab_installer_health >/dev/null 2>&1; then ab_installer_health; return; fi
+ target=$(ab_getenv "${AB_ENV}_installer_target") || target=
+ case "$target" in
+ 0|1) [ "$target" != "$AB_ACTIVE" ] ;;
+ '') [ -z "$(ab_getenv "${AB_ENV}_installer_job")$(ab_getenv "${AB_ENV}_installer_image")" ] ;;
+ *) return 1 ;;
+ esac
+}
+
 PAUSE=${AB_GUARD_PAUSE:-5}
 BOARD_DATA_STATUS=${CAMBIUM_BDF_STATUS:-/tmp/cambium-board-data.status}
 
@@ -113,6 +126,7 @@ healthy() {
 	local lan radios vault table
 	AB_HEALTH_FAILURE=
 	ab_identity >/dev/null 2>&1 || { unhealthy 'A/B identity check failed'; return 1; }
+	installer_healthy || { unhealthy 'installer has not completed native configuration'; return 1; }
 	if ab_hook root_healthy; then
 		"ab_${AB_FAMILY}_root_healthy" || { unhealthy 'root/overlay is not writable and complete'; return 1; }
 	else
@@ -222,11 +236,19 @@ legacy_guard() {
 }
 
 commit_trial() {
-	local slot="$1" batch=/tmp/cambium-ab-guard.$$ rc=0
+	local slot="$1" batch=/tmp/cambium-ab-guard.$$ rc=0 installer_job
 	! ab_hook healthy_boot || "ab_${AB_FAMILY}_healthy_boot" || return 1
+	installer_healthy || return 1
+	installer_job=$(ab_getenv "${AB_ENV}_installer_job") || installer_job=
+	[ "$(ab_getenv "${AB_ENV}_installer_target")" = "$slot" ] || installer_job=
 	printf "${AB_ENV}_ab_confirmed %s\n${AB_ENV}_ab_state confirmed\nimage %s\n" "$slot" "$slot" > "$batch"
 	# A committed switch supersedes any earlier failure.
 	printf "${AB_ENV}_ab_target\n${AB_ENV}_ab_last_failure\n" >> "$batch"
+	if [ -n "$installer_job" ]; then
+		# Stable boot and pending-field removal share one environment batch.
+		printf 'bootcmd run %s_stable%s\n' "$AB_ENV" "$slot" >> "$batch"
+		ab_installer_clear_pending "$batch" || { rm -f "$batch"; return 1; }
+	fi
 	ab_setenv_batch "$batch" || rc=1
 	rm -f "$batch"
 	[ "$rc" = 0 ] && ab_setenv bootcmd "run ${AB_ENV}_stable$slot" || {
@@ -234,6 +256,8 @@ commit_trial() {
 		return 1
 	}
 	log "slot $slot healthy; it is now the default, with slot $((1 - slot)) as fallback"
+	[ -z "$installer_job" ] || ab_installer_cleanup_confirmed "$installer_job" "$slot" ||
+		log 'confirmed installer seed cleanup will retry on the next healthy boot' 
 }
 
 record_rollback() {
@@ -274,6 +298,10 @@ ab_guard() {
 	*)
 		if ab_hook healthy_boot && [ "$running" = "$confirmed" ]; then
 			wait_healthy ab && "ab_${AB_FAMILY}_healthy_boot" || return 1
+		fi
+		if [ "$running" = "$confirmed" ] && [ "$state" = confirmed ] &&
+		   command -v ab_installer_cleanup_confirmed >/dev/null 2>&1; then
+			ab_installer_cleanup_confirmed '' "$running" || log 'confirmed installer seed cleanup still pending'
 		fi
 		if [ "$running" != "$confirmed" ] && [ "$state" != fallback ]; then
 			local batch=/tmp/cambium-ab-guard.$$
