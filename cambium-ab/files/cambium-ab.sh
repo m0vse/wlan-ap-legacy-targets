@@ -251,7 +251,7 @@ ab_stable_command() {
 # Only named variables are used, so no nested quoting reaches U-Boot.
 ab_trial_command() {
 	ab_stable_command "$1" "$2" >/dev/null || return 1
-	echo "setenv bootcmd run ${AB_ENV}_stable$1; setenv image $1; setenv ${AB_ENV}_ab_state trial-started; saveenv; run ${AB_ENV}_boot$2; run ${AB_ENV}_boot$1"
+	echo "setenv bootcmd run ${AB_ENV}_boot$1 && setenv image $1 && setenv ${AB_ENV}_ab_state trial-started && saveenv && run ${AB_ENV}_boot$2; run ${AB_ENV}_boot$1"
 }
 
 # fw_printenv/fw_setenv against the family's verified 64 KiB mapping.
