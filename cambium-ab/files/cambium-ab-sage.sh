@@ -77,6 +77,24 @@ ab_sage_guarded_command() {
 	return 1
 }
 
+# Compatibility for the exact earlier OEM->OpenWiFi boot renderer. Preserve
+# its proven source function; never permit arbitrary extra args, a different
+# slot, FIT or flash map. Only the retained clk_ignore_unused spelling differs.
+ab_sage_prior_boot_valid() {
+	local stored=$1 expected=$2 actual rootargs source_fit
+	case "$AB_MODEL:$AB_ACTIVE" in E410:0|E410:1|E410B:0|E410B:1) ;; *) return 1 ;; esac
+	[ "$(ab_sage_root_format "$AB_ACTIVE")" = squashfs ] || return 1
+	actual=$(ab_boot_command "$AB_ACTIVE") || return 1
+	[ "$expected" = "$actual" ] || return 1
+	source_fit=$AB_FIT
+	[ "${AB_SAGE_LEGACY_B:-0}" != 1 ] || source_fit=config@ap.dk01.1-c2
+	rootargs="mtdparts=spi0.1:128M(fs) ubi.mtd=fs ubi.block=0,rootfs$AB_ACTIVE root=/dev/ubiblock0_$((2 * AB_ACTIVE + 1)) rootfstype=squashfs ro rootwait fstools_overlay_name=rootfs_data$AB_ACTIVE cambium_sage_slot=$AB_ACTIVE clk_ignore_unused"
+	actual="setenv image $AB_ACTIVE; setenv bootargs \"$rootargs\"; nand device 1 && setenv mtdids nand1=nand1 && setenv mtdparts \"mtdparts=nand1:0x8000000@0x0(fs)\" && ubi part fs && ubi read 0x84000000 linux$AB_ACTIVE && bootm 0x84000000#$source_fit"
+	[ "$stored" = "$actual" ] && return 0
+	actual="setenv image $AB_ACTIVE; setenv bootargs $rootargs; nand device 1 && setenv mtdids nand1=nand1 && setenv mtdparts mtdparts=nand1:0x8000000@0x0(fs) && ubi part fs && ubi read 0x84000000 linux$AB_ACTIVE && bootm 0x84000000#$source_fit"
+	[ "$stored" = "$actual" ]
+}
+
 ab_sage_running_slot() {
 	local slot
 	slot=$(CAMBIUM_CMDLINE=${AB_CMDLINE:-/proc/cmdline} cambium_sage_running_slot)

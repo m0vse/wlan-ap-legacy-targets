@@ -134,6 +134,28 @@ ab_record_failure() {
 	ab_fail "$msg"
 }
 
+# Preserve only the exact working source before any inactive-bank write.
+# Optional family compatibility recognizes an explicit old spelling, not
+# arbitrary commands. Never regenerate or overwrite the stored source vector.
+ab_persist_prior_boot() {
+	local expected stored prior
+	expected=$(ab_boot_command "$AB_ACTIVE") || return 1
+	stored=$(ab_getenv "${AB_ENV}_boot$AB_ACTIVE") || return 1
+	[ -n "$expected" ] && [ -n "$stored" ] ||
+		{ ab_fail 'working source boot command is missing'; return 1; }
+	if [ "$stored" != "$expected" ]; then
+		ab_hook prior_boot_valid && "ab_${AB_FAMILY}_prior_boot_valid" "$stored" "$expected" ||
+			{ ab_fail 'working source boot command changed'; return 1; }
+	fi
+	prior="run ${AB_ENV}_boot$AB_ACTIVE"
+	ab_setenv bootcmd "$prior" && ab_setenv image "$AB_ACTIVE" && sync ||
+		{ ab_fail 'cannot persist working source; no target was written'; return 1; }
+	[ "$(ab_getenv bootcmd)" = "$prior" ] &&
+		[ "$(ab_getenv image)" = "$AB_ACTIVE" ] &&
+		[ "$(ab_getenv "${AB_ENV}_boot$AB_ACTIVE")" = "$stored" ] ||
+		{ ab_fail 'working source readback changed; no target was written'; return 1; }
+}
+
 # Readback: the first $3 bytes of volume $1 must hash like file $2.
 ab_verify_volume() {
 	[ "$(head -c "$3" "$1" | sha256sum | cut -d' ' -f1)" = \
@@ -222,6 +244,8 @@ cambium_ab_do_upgrade() {
 		type ab_certificate_validate_snapshot >/dev/null 2>&1 && ab_certificate_validate_snapshot ||
 			{ ab_fail 'RAM-stage certificate snapshot validation failed; no bank was written'; return 1; }
 	fi
+
+	ab_persist_prior_boot || return 1
 
 	# Record the write before touching the bank. bootcmd still boots the
 	# running bank first, so an interrupted write never loses it.
