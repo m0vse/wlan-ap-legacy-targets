@@ -3,13 +3,12 @@
 # with a copy of the running OpenWrt bank, so both banks run OpenWrt and
 # normal sysupgrade can write whichever is inactive.
 #
-# Usage: cambium-ab-convert --oem-sha256 HASH [--allow-untested] --yes
+# Usage: cambium-ab-convert --oem-sha256 HASH --yes
 #        cambium-ab-convert --resume --yes
 #
 #   --oem-sha256 HASH  SHA-256 of your verified off-device copy of the OEM
 #                      bank (e.g. dd if=/dev/mtdNro). The live bank must match
 #                      it exactly, proving the backup before it is erased.
-#   --allow-untested   permit a model whose A/B layout is not yet validated
 #   --resume           finish a conversion that was interrupted after the
 #                      OEM bank was erased (the backup was already proven)
 #   --yes              required; erasing the OEM bank cannot be undone here
@@ -18,6 +17,16 @@
 # running bank must hold a valid device-data vault (filled from the OEM slot
 # at first boot), and the boot environment must already boot the running
 # bank first. The OEM image value is kept as ${AB_ENV}_ab_oem_image.
+
+# Reject the retired override before sourcing libraries or inspecting hardware.
+for argument in "$@"; do
+	case "$argument" in
+	--allow-untested|--allow-untested=*)
+		echo 'cambium-ab-convert: --allow-untested is not supported; a validated model is required' >&2
+		exit 2
+		;;
+	esac
+done
 
 . "${CAMBIUM_SYSTEM_FUNCTIONS:-/lib/functions/system.sh}"
 . "${CAMBIUM_AB_LIB:-/lib/functions/cambium-ab.sh}"
@@ -29,11 +38,10 @@ die() {
 	exit 1
 }
 
-oem_sha= allow_untested= resume= yes=
+oem_sha= resume= yes=
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--oem-sha256) oem_sha=$2; shift ;;
-	--allow-untested) allow_untested=1 ;;
 	--resume) resume=1 ;;
 	--yes) yes=1 ;;
 	*) die "unknown argument $1" ;;
@@ -47,8 +55,8 @@ ab_identity || die 'identity or layout check failed'
 [ "$AB_LAYOUT" != pair ] ||
 	die "$AB_NAME needs no conversion: its first sysupgrade writes the other slot"
 ab_converted && die 'already converted; use sysupgrade'
-[ "$AB_QUALIFIED" = 1 ] || [ -n "$allow_untested" ] ||
-	die "$AB_MODEL has no validated A/B conversion yet (--allow-untested overrides)"
+[ "$AB_QUALIFIED" = 1 ] ||
+	die "$AB_MODEL has no validated A/B conversion yet"
 ab_mtd_writable "$AB_TARGET_MTD" ||
 	die "bank $AB_TARGET_PART is read-only: install the A/B persistent image first"
 [ "$AB_VAULT" != 1 ] || ${AB_BOARD_DATA:-/usr/sbin/cambium-board-data} --check-vault ||
