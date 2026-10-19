@@ -12,3 +12,8 @@
 		board-sku = <21>;
 	};
 };
+
+/* Keep the factory pre-calibration path and all other radios unchanged. */
+&wifi1 {
+	qcom,ath10k-calibration-variant = "Cambium-E410B-5G";
+};

@@ -2,7 +2,14 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ath10k-ct-firmware
 PKG_VERSION:=2020.10.07
-PKG_RELEASE:=2
+PKG_RELEASE:=3
+
+# Private, hash-verified input; never fetch or redistribute OEM data implicitly.
+# Required only when packaging the qualified Sage family target.
+CAMBIUM_E410B_5G_BDF ?=
+PKG_CONFIG_DEPENDS += CONFIG_TARGET_ipq40xx_generic_DEVICE_cambium-sage \
+	CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_cambium-sage
+PKG_FILE_DEPENDS += $(CURDIR)/files/cambium-e410b-board-data.py $(CAMBIUM_E410B_5G_BDF)
 CTVER1=021
 CTVER2=021
 
@@ -640,6 +647,12 @@ define Package/ath10k-firmware-qca4019-ct-htt/install
 	$(INSTALL_DATA) \
 		$(DL_DIR)/$(QCA4019_BOARD2_FILE) \
 		$(1)/lib/firmware/ath10k/QCA4019/hw1.0/board-2.bin
+	$(if $(filter y,$(CONFIG_TARGET_ipq40xx_generic_DEVICE_cambium-sage) $(CONFIG_TARGET_DEVICE_ipq40xx_generic_DEVICE_cambium-sage)), \
+		$(STAGING_DIR_HOST)/bin/python3 $(CURDIR)/files/cambium-e410b-board-data.py \
+		--base "$(DL_DIR)/$(QCA4019_BOARD2_FILE)" \
+		--asset "$(CAMBIUM_E410B_5G_BDF)" \
+		--output "$(1)/lib/firmware/ath10k/QCA4019/hw1.0/board-2.bin" \
+		--model E410B --radio 5g --board-id 17)
 	$(INSTALL_DATA) \
 		$(DL_DIR)/$(call CT_FIRMWARE_FILE_HTT,QCA4019) \
 		$(1)/lib/firmware/ath10k/QCA4019/hw1.0/ct-firmware-5.bin
